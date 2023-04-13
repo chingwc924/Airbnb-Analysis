@@ -1,0 +1,400 @@
+## Customer and Social Analytics Midterm
+
+***Importing packages***
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(sqldf)
+library(corrplot)
+library(tidyverse)
+library(pROC)
+```
+
+### ***Q1: What is the value of randomized experiment approach in the context?***
+
+By conducting a randomized experiment to evaluate the impact of Airbnb's Plus certification program on user behavior, the team can test the effectiveness of the program and optimize the platform to better meet customer needs. Compared to scraping data, a randomized experiment is the gold standard for evaluating interventions. It eliminates bias and helps identify causal effects. It also allows for the control of confounding factors that may influence user behavior, and provides more detailed data on user behavior, including willingness-to-pay and decision-making processes. In conclusion, while scraping data may offer some insights into user behavior, a randomized experiment is a more rigorous and controlled approach for evaluating the impact of the Plus certification program on user behavior. ![](images/image-764787041.png)
+
+### ***Q2: Descriptive Statistics of Variables***
+
+```{r setup}
+# Setting the directory
+knitr::opts_knit$set(root.dir = '/Users/wendychiang/Desktop/2023 Winter/Customer Analytics')
+```
+
+```{r}
+# Importing data
+airbnb <- data.frame(read.csv("Imps.csv"))
+```
+
+-   ***Overall summary of the entire data-set***
+
+In this data set, we have 8880 observations and 8 columns in total.
+
+```{r}
+str(airbnb)
+```
+
+In the overall summary of the data-set, we can take a closer look of the "Price". The average WIP is \$212.4. The minimum WIP is \$95, and the maximum is \$399. As for the quartile, Q1 is \$178, Q2 (median) is \$209, and Q3 is \$243.5. Besides, range of "Rank" is from 1 to 40. Since other variables are either binary or ordinal, the statistics provided in the chunk don't appropriately to those variables.
+
+```{r}
+# Overall summary of the entire dataset
+summary(airbnb)
+```
+
+-   ***Descriptive Statistics of Binary/ Categorical Variables***
+
+For "Listing_ID" and "Userid", there are 47 unique housing and 222 unique users in the experiment.
+
+```{r}
+sqldf('SELECT COUNT(DISTINCT Listing_ID) AS HOUSE, COUNT(DISTINCT Userid) AS User FROM airbnb')
+```
+
+For the binary variable "Plus", randomly assigned 40 out of 47 unique housings to each user, there are 777 housings listed in the Plus Badge, which is 8.75%, matching with the experiment setting of 9%.
+
+```{r}
+# Calculate the count of housings receiving Plus or not
+table(airbnb$Plus)
+```
+
+For "Program", there are 88 students from the MBA and 134 students from the MSBA.
+
+```{r}
+# Calculate the count of students from each program
+sqldf('SELECT Program, COUNT(DISTINCT Userid) AS Count FROM airbnb GROUP BY Program')
+```
+
+For the binary variable "Booked", there are 222 housings successfully got booked, which is 2.5% overall booking rate.
+
+```{r}
+table(airbnb$Booked)
+```
+
+-   ***Descriptive Statistics of Numeric Variables***
+
+```{r}
+# standard deviation and variance of numeric variable
+sd(airbnb$Price)
+var(airbnb$Price)
+```
+
+For "Price", we can see from both graphs that group_noplus has a more concentrate price range than group_plus. Both groups have close mean price. Besides, there's one possible outlier in the group_noplus.
+
+```{r}
+# Histogram of the Price
+ggplot(airbnb, aes(x=Price)) + 
+  geom_histogram(binwidth=15, fill="darkolivegreen", color="#e9ecef", alpha=0.7)+
+  ylab('Frequency')+
+  ggtitle('Price Distribution of Airbnb')+
+  theme(plot.title=element_text(size=14,face="bold"))
+
+# Box Plot of Price (Plus vs No-Plus)
+ggplot(airbnb, aes(x=as.factor(Plus), y=Price)) + 
+    geom_boxplot(alpha=0.3, fill='aquamarine4') +
+    xlab("Plus")+
+    ggtitle('Price Boxplot')+
+    theme(plot.title=element_text(size=14,face="bold"))
+    
+
+# Price Distribution of Plus and No-Plus
+ggplot(airbnb,aes(x=Price,fill=factor(Plus)))+
+  geom_density(alpha=0.25)+
+  scale_fill_manual(values=c("steelblue3", "goldenrod2"),
+                    name="Plus Badge",
+                      breaks=c("0", "1"),
+                      labels=c("No-Plus", "Plus"))+
+  geom_vline(aes(xintercept=mean(Price[Plus==0],na.rm=T)),color="steelblue3",
+             linetype="dashed",lwd=1)+
+  geom_vline(aes(xintercept=mean(Price[Plus==1],na.rm=T)),color="goldenrod2",
+             linetype="dashed",lwd=1)+
+  xlab(label = "Price")+
+  ggtitle("Price Distribution Based on Plus")+
+  theme(plot.title=element_text(size=14,face="bold"))
+
+```
+
+### ***Q3: Data Visualization***
+
+-   [***Correlation of Each Variable***]{.underline}
+
+Before aggregating any data, we can take a look of the correlation of each variable. We can't see obvious relationship in the graph. However, there are two highlighted parts in it. First, "Booked" and "Plus" have a slightly positive relationship. Second, "Price" and "Rank" have a negative correlation. Both findings can be used for the further analysis.
+
+```{r}
+corrplot::corrplot(cor(airbnb[c('Plus','Rank','Price','Booked')]))
+```
+
+-   [***Plus \~ Booked***]{.underline}
+
+To analyze the effect for [**Plus on Booked**]{.underline}, I used the Pearson's Chi-Squared to test whether there's significant association between two variables. Here's the hypotheses:
+
+*H0: there's no significant association between the two binary variables 'Plus' and 'Booked'*
+
+*Ha: there is a significant association between these variables.*
+
+```{r}
+binary <- table(airbnb[c('Plus','Booked')])
+chisq.test(binary)
+phi_coef <- sqrt(chisq.test(binary)$statistic / sum(binary))
+phi_coef
+if (chisq.test(binary)$p.value < 0.05) {
+  cat("The two sets of binary data are significantly associated (p < 0.05) with a phi coefficient of", round(phi_coef, 3), "\n")
+} else {
+  cat("There is no significant association (p >= 0.05) between the two sets of binary data with a phi coefficient of", round(phi_coef, 3), "\n")
+}
+```
+
+The result [**rejects H0**]{.underline}, meaning that there's a significant association between two variables. Following is the visualization of booking rate in terms of receiving the Plus Badge or not.
+
+```{r}
+plus_booked <- sqldf(
+'SELECT Plus, Booked,
+COUNT(Booked)/CAST((SELECT COUNT(*) FROM airbnb WHERE Plus = 0) AS FLOAT) AS Rate
+FROM airbnb
+WHERE Plus = 0
+GROUP BY Booked
+UNION
+SELECT Plus, Booked,
+COUNT(Booked)/CAST((SELECT COUNT(*) FROM airbnb WHERE Plus = 1) AS FLOAT) AS Rate
+FROM airbnb
+WHERE Plus = 1
+GROUP BY Booked')
+
+
+#Plot
+ggplot(plus_booked, aes(as.factor(Booked), Rate, fill = as.factor(Plus))) +
+  geom_bar(stat="identity", position = "dodge2", alpha=.75) +
+  geom_text(aes(label=round(Rate,3)), position=position_dodge(width=0.9), vjust=-0.23) +
+  xlab('Booked')+
+  ylab('Booking Rate')+ 
+  ggtitle("Booking Rate of Plus Badge")+
+  theme(plot.title=element_text(size=14,face="bold"))+
+  scale_fill_discrete(name="Plus Badge",
+                      breaks=c("0", "1"),
+                      labels=c("No-Plus", "Plus"))
+
+```
+
+As we can see in the graph, the booking rate of having the Plus is [**1.3% higher**]{.underline} than without the Plus. With both statically and visually evidence, the Plus Badge does help to improve the booking rate in Airbnb.
+
+-   [***Price \~ Booked***]{.underline}
+
+To analyze the effect for [**Price on Booked**]{.underline}, I used the Welch two sample t-test to test whether there's significant association between two variables. Here's the hypotheses:
+
+*H0: The mean of the Price of No-Booked = The mean of the Price Booked*
+
+*Ha: The mean of the Price of No-Booked != The mean of the Price Booked*
+
+```{r}
+test_price_booked <- t.test(airbnb$Price ~ airbnb$Booked)
+test_price_booked
+if (test_price_booked$p.value < 0.05) {
+  cat("There's a significant effect between Price and Booked, with a p-value < 0.05", "\n","-> Reject H0")
+} else {
+  cat("There's no significant effect between Price and Booked, with a p-value < 0.05", "\n","-> Do not Reject H0")
+}
+```
+
+The result [**rejects H0**]{.underline}, meaning that there's a significant association between two variables. Following is the visualization of mean Price in terms of booking the room or not.
+
+```{r}
+# First graph analysis
+price_booked <- sqldf('SELECT Booked, SUM(Price)/CAST(COUNT(*) AS FLOAT) AS Mean_Price
+FROM airbnb WHERE Booked = 0
+UNION
+SELECT Booked,SUM(Price)/CAST(COUNT(*) AS FLOAT) AS Mean_Price
+FROM airbnb WHERE Booked = 1')
+
+#Plot
+ggplot(price_booked, aes(as.factor(Booked), Mean_Price, fill = as.factor(Booked))) +
+  geom_bar(stat="identity", position = "dodge2", alpha=.75) +
+  geom_text(aes(label=round(Mean_Price,2)), position=position_dodge(width=0.9), vjust=-0.23) +
+  xlab('Booked')+
+  ylab('Mean Price')+ 
+  ggtitle("Mean Price of Booking")+
+  theme(plot.title=element_text(size=14,face="bold"))+
+  scale_fill_discrete(name="Booking",
+                      breaks=c("0", "1"),
+                      labels=c("No-Booked", "Booked"))
+
+# Second graph analysis
+airbnb$Price_GP <- cut(airbnb$Price, breaks= c(94,178,209,243.5,400), labels= c(1,2,3,4))
+
+gpprice_booked <- sqldf('SELECT Price_GP, COUNT(Booked), COUNT(Booked)/CAST((SELECT COUNT(*) FROM airbnb) AS FLOAT) AS Rate
+FROM airbnb 
+WHERE Booked = 1
+GROUP BY Price_GP')
+
+#Plot
+ggplot(gpprice_booked, aes(as.factor(Price_GP), Rate, fill=as.factor(Price_GP))) +
+  geom_bar(stat="identity", position = "dodge2", alpha=0.75) +
+  geom_text(aes(label=round(Rate,4)), position=position_dodge(width=0.9), vjust=-0.23) +
+  xlab('Price Group')+
+  ylab('Booking Rate')+ 
+  ggtitle("Booking Rate by Each Price Group")+
+  theme(plot.title=element_text(size=14,face="bold"))+
+  scale_fill_discrete(name="Price Group")
+
+# Third graph analysis
+gpprice_plus <- sqldf('SELECT Price_GP, COUNT(Plus) AS Plus, COUNT(Booked)/CAST((SELECT COUNT(*) FROM airbnb) AS FLOAT) AS Rate
+FROM airbnb 
+WHERE Booked = 1 AND Plus=1
+GROUP BY Price_GP')
+
+#Plot
+ggplot(gpprice_plus, aes(as.factor(Price_GP), Plus, fill=as.factor(Price_GP))) +
+  geom_bar(stat="identity", position = "dodge2", alpha=0.75) +
+  geom_text(aes(label=Plus), position=position_dodge(width=0.9), vjust=-0.23) +
+  xlab('Price Group')+
+  ylab('Plus Count')+ 
+  ggtitle("Plus Count by Each Price Group")+
+  theme(plot.title=element_text(size=14,face="bold"))+
+  scale_fill_discrete(name="Price Group")
+```
+
+As we can see in the first graph, the mean Price of booking is [**\$4 lower**]{.underline} than not booking the room. We can imply that pricing affects people's final choice of booking a room or not. The lower the price, the more likely to book the room.
+
+To further strengthen our thought of the price, I separate the housing based on the price to see the difference between each group. As you can see in the second graph, group 1 (94\~178) has the highest booking rate, suggesting that people do take price as one of the factor when booking a room on the Airbnb.
+
+What we can learn from the third graph is that even group 4 has the highest price among all groups, having a plus or not will somehow elevate the booking rate, strengthening our first analysis that having a plus badge will have a positive effect on booking.
+
+```{r}
+plus_price <- sqldf('SELECT Booked, Plus,SUM(Price)/CAST(COUNT(*) AS FLOAT) AS Mean_Price
+FROM airbnb WHERE Booked = 0 GROUP BY Plus
+UNION
+SELECT Booked, Plus, SUM(Price)/CAST(COUNT(*) AS FLOAT) AS Mean_Price
+FROM airbnb WHERE Booked = 1 GROUP BY Plus')
+
+#Plot
+ggplot(plus_price, aes(as.factor(Booked), Mean_Price, fill = as.factor(Plus))) +
+  geom_bar(stat="identity", position = "dodge2",alpha=.75) +
+  geom_text(aes(label=round(Mean_Price,2)), position=position_dodge(width=0.9), vjust=-0.23) +
+  xlab('Booked')+
+  ylab('Mean Price')+ 
+  ggtitle("Mean Price of Booking (Plus vs No-Plus)")+
+  theme(plot.title=element_text(size=14,face="bold"))+
+  scale_fill_discrete(name="Plus",
+                      breaks=c("0", "1"),
+                      labels=c("No-Plus", "Plus"))
+```
+
+As we look at the last graph of this section, for those housings not be chosen, the mean price has no obvious difference from having a Plus or not. However, the interesting part is that the price of gap of booking a room between having a Plus or not is [**\$13.13**]{.underline}, suggesting that hosts with a Plus Badge are willing to offer their properties at a lower price than hosts without a Plus Badge.
+
+There could be a few possible reasons for this. One possibility is that hosts with a Plus Badge may be trying to compensate for any perceived disadvantage or stigma associated with their properties, and thus may be willing to offer them at a lower price. Alternatively, hosts with a Plus Badge may be more price-sensitive or focused on providing value to renters, and may be more willing to set a lower price point in order to attract renters.
+
+-   [***Rank \~ Booked***]{.underline}
+
+To analyze the effect for [**Rank on Booked**]{.underline}, I used the Wilcoxon rank sum test to test whether there's significant association between two variables. Here's the hypotheses:
+
+*H0: there's no significant association between the two variables 'Rank' and 'Booked'*
+
+*Ha: there is a significant association between these variables.*
+
+```{r}
+test_rank_booked <- wilcox.test(Rank ~ Booked, data = airbnb)
+test_rank_booked
+if (test_rank_booked$p.value < 0.05) {
+  cat("There's a significant effect between Rank and Booked, with a p-value < 0.05", "\n","-> Reject H0")
+} else {
+  cat("There's no significant effect between Rank and Booked, with a p-value < 0.05", "\n","-> Do not Reject H0")
+}
+```
+
+The result [**rejects H0**]{.underline}, meaning that there's a significant association between two variables. Following is the visualization of booking rate in terms of each rank.
+
+```{r}
+rank_booked <- sqldf(
+'SELECT r1.Rank, r1.Total AS Not_Booked, r2.Total AS Booked, r2.Total/CAST((r1.Total+r2.Total) AS FLOAT) AS Rate
+FROM 
+(SELECT DISTINCT Rank, COUNT(Booked) AS Total
+FROM airbnb
+WHERE Booked = 0
+GROUP BY Rank) AS r1
+INNER JOIN 
+(SELECT DISTINCT Rank, COUNT(Booked) AS Total
+FROM airbnb
+WHERE Booked = 1
+GROUP BY Rank) AS r2
+USING(Rank)')
+
+rank_price <- sqldf(
+'SELECT Rank, AVG(Price) AS Mean_Price
+FROM airbnb
+GROUP BY Rank')
+
+ggplot((rank_booked), aes(x=Rank, y=Rate)) + 
+  geom_bar(stat = "identity", alpha=0.75, fill='tomato1')+
+  ggtitle("Booking Rate by Rank")+
+  theme(plot.title=element_text(size=14,face="bold"))
+
+ggplot((rank_price), aes(x=Rank, y=Mean_Price)) + 
+  geom_bar(stat = "identity", alpha=0.75, fill='steelblue')+
+  ggtitle("Mean Price by Rank")+
+  theme(plot.title=element_text(size=14,face="bold"))
+```
+
+As we can see in the first graph, the booking is highly [**concentrate within top 20**]{.underline}, with rank 8 has the highest booking rate. One thing we can notice is that rank 29 has the second highest booking rate, which is quite unusual because people usually prefer things with higher ranking. Thus, I do an analysis on the price by each rank to see if there's any clue explaining the situation.
+
+From the second graph, we can see that rank 49 has the lowest average price, aligning with our previous thought that lower price leads to a higher booking rate. Since all participants in the experiment are students who are more sensitive to the price, making it a more affordable option for those on a budget. This could make it a popular choice for people looking for a bargain.
+
+### ***Q4: Logistic Regression***
+
+```{r}
+airbnb$lnPrice <- log(airbnb$Price)
+airbnb$lnRank <- log(airbnb$Rank)
+
+model <- glm(Booked ~ Plus + lnPrice + lnRank,
+             data = airbnb, 
+             family = binomial())
+
+summary(model)
+
+probs <- predict(model, type = "response")
+
+
+roc_obj <- roc(airbnb$Booked, probs)
+ggroc(roc_obj, colour = 'dodgerblue3', size = 1) +
+  geom_abline(intercept = 1, colour = 'grey', lty = 'dashed')+
+  ggtitle('ROC Curve, AUC = 0.587')+
+  xlab("Specificity") +
+  ylab("Sensitivity")
+```
+
+Through the application of logistic regression analysis, we can see every independent variable is significant. Receiving a Plus Badge will have a positive effect on the booking. However, if one's price and rank increase, they will decrease the booking.
+
+### ***Q5: Generate the exponentiated form of coefficients and interpret the odds ratios***
+
+```{r}
+exp_coef <- exp(coef(model))
+exp_confint <- exp(confint.default(model))
+cbind(exp_coef, exp_confint)
+```
+
+In a logistic regression the response being modeled is the log(odds) that Y = 1 (Booked the room).
+
+-   Plus: The odds of booking a room will increase by around 53.7% (exp of 0.43) if the room received a Plus Badge.
+-   lnPrice: 1% increase in Price is associated with a 1.12% decrease in odds
+-   lnRank: 1% increase in Rank is associated with a 0.21% decrease in odds
+
+### ***Q6: What is the impact of a Plus Badge on the probability of booking, holding other variables at their mean values?***
+
+```{r}
+test <- data.frame(Plus=c(0,1),
+
+                   lnPrice=mean(airbnb$lnPrice),
+
+                   lnRank=mean(airbnb$lnRank))
+
+test
+```
+
+```{r}
+test$prob <- predict(model, newdata=test, type="response")
+
+test
+```
+
+Holding other variables consistent, getting a Plus Badge increases the probability of booking by 0.12%.
+
+### ***Q7: What are the main takeaways from your analysis?***
+
+The results of the experiment suggest that price does have an important impact on booking at every stage of the analysis. In addition, the Plus Program was found to be a crucial factor in the decision-making process when booking higher-priced housing. Overall, the Plus Program had a positive effect on the booking rate, indicating that it may be a valuable feature for Airbnb hosts to consider when looking to increase their bookings. These findings provide important insights for both Airbnb hosts and users, and highlight the benefits of using randomized experiments to understand the causal relationships between different factors in the platform.
